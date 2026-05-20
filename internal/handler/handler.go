@@ -2,49 +2,53 @@ package handler
 
 import (
 	"errors"
+	"html/template"
 	"net/http"
-	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	"go-metrics/internal/service"
 )
 
 type MetricService interface {
 	UpdateMetric(metricType string, metricName string, metricValue string) error
+	GetMetricValue(metricType string, metricName string) (string, error)
+	GetAllMetrics() (map[string]float64, map[string]int64)
 }
 
 type Handler struct {
 	metricService MetricService
+	router        chi.Router
 }
 
 func NewHandler(metricService MetricService) *Handler {
-	return &Handler{
+	h := &Handler{
 		metricService: metricService,
+		router:        chi.NewRouter(),
 	}
+
+	h.initRoutes()
+
+	return h
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/update" {
-		http.NotFound(w, r)
-		return
-	}
+	h.router.ServeHTTP(w, r)
+}
 
-	if !strings.HasPrefix(r.URL.Path, "/update/") {
-		http.NotFound(w, r)
-		return
-	}
-
-	h.updateMetric(w, r)
+func (h *Handler) initRoutes() {
+	h.router.Get("/", h.getAllMetrics)
+	h.router.Post("/update/{metricType}/{metricName}/{metricValue}", h.updateMetric)
+	h.router.Get("/value/{metricType}/{metricName}", h.getMetricValue)
 }
 
 func (h *Handler) updateMetric(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "only POST method is allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	metricType := chi.URLParam(r, "metricType")
+	metricName := chi.URLParam(r, "metricName")
+	metricValue := chi.URLParam(r, "metricValue")
 
-	metricType, metricName, metricValue, statusCode, ok := parseUpdatePath(r.URL.Path)
-	if !ok {
-		http.Error(w, http.StatusText(statusCode), statusCode)
+	if metricName == "" {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -69,34 +73,99 @@ func (h *Handler) updateMetric(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func parseUpdatePath(path string) (
-	metricType string,
-	metricName string,
-	metricValue string,
-	statusCode int,
-	ok bool,
-) {
-	parts := strings.Split(path, "/")
-
-	if len(parts) != 5 {
-		return "", "", "", http.StatusNotFound, false
-	}
-
-	if parts[1] != "update" {
-		return "", "", "", http.StatusNotFound, false
-	}
-
-	metricType = parts[2]
-	metricName = parts[3]
-	metricValue = parts[4]
+func (h *Handler) getMetricValue(w http.ResponseWriter, r *http.Request) {
+	metricType := chi.URLParam(r, "metricType")
+	metricName := chi.URLParam(r, "metricName")
 
 	if metricName == "" {
-		return "", "", "", http.StatusNotFound, false
+		http.NotFound(w, r)
+		return
 	}
 
-	if metricValue == "" {
-		return "", "", "", http.StatusBadRequest, false
+	value, err := h.metricService.GetMetricValue(metricType, metricName)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrMetricNotFound):
+			http.NotFound(w, r)
+			return
+
+		case errors.Is(err, service.ErrInvalidMetricType):
+			http.NotFound(w, r)
+			return
+
+		default:
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
 	}
 
-	return metricType, metricName, metricValue, http.StatusOK, true
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(value))
 }
+
+func (h *Handler) getAllMetrics(w http.ResponseWriter, r *http.Request) {
+	gauges, counters := h.metricService.GetAllMetrics()
+
+	pageData := struct {
+		Gauges   map[string]float64
+		Counters map[string]int64
+	}{
+		Gauges:   gauges,
+		Counters: counters,
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+
+	_ = metricsPageTemplate.Execute(w, pageData)
+}
+
+var metricsPageTemplate = template.Must(template.New("metrics").Parse(`
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="UTF-8">
+	<title>Metrics</title>
+</head>
+<body>
+	<h1>Metrics</h1>
+
+	<h2>Gauge</h2>
+	<table border="1" cellpadding="5" cellspacing="0">
+		<tr>
+			<th>Name</th>
+			<th>Value</th>
+		</tr>
+		{{ range $name, $value := .Gauges }}
+		<tr>
+			<td>{{ $name }}</td>
+			<td>{{ $value }}</td>
+		</tr>
+		{{ else }}
+		<tr>
+			<td colspan="2">No gauge metrics</td>
+		</tr>
+		{{ end }}
+	</table>
+
+	<h2>Counter</h2>
+	<table border="1" cellpadding="5" cellspacing="0">
+		<tr>
+			<th>Name</th>
+			<th>Value</th>
+		</tr>
+		{{ range $name, $value := .Counters }}
+		<tr>
+			<td>{{ $name }}</td>
+			<td>{{ $value }}</td>
+		</tr>
+		{{ else }}
+		<tr>
+			<td colspan="2">No counter metrics</td>
+		</tr>
+		{{ end }}
+	</table>
+</body>
+</html>
+`))

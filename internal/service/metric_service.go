@@ -11,6 +11,7 @@ import (
 var (
 	ErrInvalidMetricType  = errors.New("invalid metric type")
 	ErrInvalidMetricValue = errors.New("invalid metric value")
+	ErrMetricNotFound     = errors.New("metric not found")
 )
 
 type MetricService struct {
@@ -46,4 +47,34 @@ func (s *MetricService) UpdateMetric(metricType string, metricName string, metri
 	default:
 		return ErrInvalidMetricType
 	}
+}
+
+func (s *MetricService) GetMetricValue(metricType string, metricName string) (string, error) {
+	switch metricType {
+	case models.Gauge:
+		value, ok := s.storage.GetGauge(metricName)
+		if !ok {
+			return "", ErrMetricNotFound
+		}
+
+		return strconv.FormatFloat(value, 'f', -1, 64), nil
+
+	case models.Counter:
+		value, ok := s.storage.GetCounter(metricName)
+		if !ok {
+			return "", ErrMetricNotFound
+		}
+
+		return strconv.FormatInt(value, 10), nil
+
+	default:
+		return "", ErrInvalidMetricType
+	}
+}
+
+func (s *MetricService) GetAllMetrics() (map[string]float64, map[string]int64) {
+	gauges := s.storage.GetAllGauges()
+	counters := s.storage.GetAllCounters()
+
+	return gauges, counters
 }

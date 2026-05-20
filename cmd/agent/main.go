@@ -1,21 +1,20 @@
 package main
 
-import "net/http"
+import (
+	"log"
+	"time"
 
-func mainPage(res http.ResponseWriter, req *http.Request) {
-	res.Write([]byte("Привет!"))
-}
-
-func apiPage(res http.ResponseWriter, req *http.Request) {
-	res.Write([]byte("Это страница /api."))
-}
+	"go-metrics/internal/agent"
+)
 
 func main() {
-	http.HandleFunc(`/api`, apiPage)
-	http.HandleFunc(`/`, mainPage)
+	metricAgent := agent.NewAgent(
+		"http://localhost:8080",
+		2*time.Second,
+		10*time.Second,
+	)
 
-	err := http.ListenAndServe(`:8080`, nil)
-	if err != nil {
-		panic(err)
-	}
+	log.Println("agent started")
+
+	metricAgent.Run()
 }
