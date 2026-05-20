@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
 
@@ -10,11 +11,17 @@ import (
 )
 
 func main() {
+	serverAddress := flag.String("a", "localhost:8080", "HTTP server address")
+
+	flag.Parse()
+
 	storage := repository.NewMemStorage()
 	metricService := service.NewMetricService(storage)
 	metricHandler := handler.NewHandler(metricService)
 
-	if err := http.ListenAndServe(":8080", metricHandler); err != nil {
+	log.Printf("server started on %s", *serverAddress)
+
+	if err := http.ListenAndServe(*serverAddress, metricHandler); err != nil {
 		log.Fatal(err)
 	}
 }
